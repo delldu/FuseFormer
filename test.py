@@ -10,6 +10,7 @@ import torch.nn as nn
 from torchvision import transforms
 
 from core.utils import Stack, ToTorchFormatTensor
+import pdb
 
 parser = argparse.ArgumentParser(description="FuseFormer")
 parser.add_argument("-v", "--video", type=str, required=True)
@@ -41,6 +42,8 @@ _to_tensors = transforms.Compose([
 
 # sample reference frames from the whole video 
 def get_ref_index(f, neighbor_ids, length):
+    # neighbor_ids -- [0, 1, 2, 3, 4, 5]
+
     ref_index = []
     if num_ref == -1:
         for i in range(0, length, ref_length):
@@ -60,6 +63,8 @@ def get_ref_index(f, neighbor_ids, length):
 
 # read frame-wise masks 
 def read_mask(mpath):
+    # mpath -- 'data/DAVIS/Annotations/blackswan'
+
     masks = []
     mnames = os.listdir(mpath)
     mnames.sort()
@@ -71,12 +76,14 @@ def read_mask(mpath):
         m = cv2.dilate(m, cv2.getStructuringElement(
             cv2.MORPH_CROSS, (3, 3)), iterations=4)
         masks.append(Image.fromarray(m*255))
+    # masks[0] -- <PIL.Image.Image image mode=L size=864x480 at 0x7F9BDC097C10>
     return masks
 
 
 #  read frames from video 
 def read_frame_from_videos(args):
-    vname = args.video
+    vname = args.video # args.video -- 'data/DAVIS/JPEGImages/blackswan'
+
     frames = []
     if args.use_mp4:
         vidcap = cv2.VideoCapture(vname)
@@ -95,15 +102,21 @@ def read_frame_from_videos(args):
             image = cv2.imread(fr)
             image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             frames.append(image.resize((w,h)))
+
+    # len(frames) -- 50
+    # frames[0] -- <PIL.Image.Image image mode=RGB size=864x480 at 0x7F04EC221460>
+    # frames[0].getpixel((0,0)) --(61, 80, 35)
     return frames       
 
 
 def main_worker():
     # set up models 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = importlib.import_module('model.' + args.model)
+    net = importlib.import_module('model.' + args.model)  # args.model -- 'fuseformer'
     model = net.InpaintGenerator().to(device)
-    model_path = args.ckpt
+
+    model_path = args.ckpt # args.ckpt -- 'checkpoints/fuseformer.pth'
+
     data = torch.load(args.ckpt, map_location=device)
     model.load_state_dict(data)
     print('loading from: {}'.format(args.ckpt))
@@ -111,30 +124,61 @@ def main_worker():
 
     # prepare datset, encode all frames into deep space 
     frames = read_frame_from_videos(args)
+
     video_length = len(frames)
-    imgs = _to_tensors(frames).unsqueeze(0)*2-1
-    frames = [np.array(f).astype(np.uint8) for f in frames]
+    imgs = _to_tensors(frames).unsqueeze(0)*2.0 - 1.0
+    # imgs.size() -- torch.Size([1, 50, 3, 480, 864]) # Element range [-1.0, 1.0]
+
+    frames = [np.array(f).astype(np.uint8) for f in frames] # frames[0].shape -- (480, 864, 3), Element range [0, 255]
+
 
     masks = read_mask(args.mask)
+
     binary_masks = [np.expand_dims((np.array(m) != 0).astype(np.uint8), 2) for m in masks]
+    #  len(binary_masks), binary_masks[0].shape, binary_masks[0].max(), binary_masks[0].min()
+    # (50, (480, 864, 1), 1, 0)
+
     masks = _to_tensors(masks).unsqueeze(0)
+    # masks.size() -- torch.Size([1, 50, 1, 480, 864])
+
+
     imgs, masks = imgs.to(device), masks.to(device)
     comp_frames = [None]*video_length
     print('loading videos and masks from: {}'.format(args.video))
 
     # completing holes by spatial-temporal transformers
+
+    # video_length, neighbor_stride -- (50, 5)
     for f in range(0, video_length, neighbor_stride):
         neighbor_ids = [i for i in range(max(0, f-neighbor_stride), min(video_length, f+neighbor_stride+1))]
         ref_ids = get_ref_index(f, neighbor_ids, video_length)
+
+        # if f == 10:
+        #   neighbor_ids -- [5, 6, 7, 8, 9, <10>, 11, 12, 13, 14, 15]
+        #   ref_ids -- [0, 20, 30, 40]
+        #   neighbor_ids+ref_ids -- [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 20, 30, 40]
+
         print(f, len(neighbor_ids), len(ref_ids))
         len_temp = len(neighbor_ids) + len(ref_ids)
         selected_imgs = imgs[:1, neighbor_ids+ref_ids, :, :, :]
         selected_masks = masks[:1, neighbor_ids+ref_ids, :, :, :]
+
         with torch.no_grad():
-            masked_imgs = selected_imgs*(1-selected_masks)
+            masked_imgs = selected_imgs*(1-selected_masks)            
             pred_img = model(masked_imgs)
-            pred_img = (pred_img + 1) / 2
+
+            # if f == 0
+            # masked_imgs.size() -- [1, 10, 3, 240, 432]
+            # pred_img.size() -- [10, 3, 240, 432]
+
+            # if f == 10:
+            #     masked_imgs.size() -- [1, 15, 3, 240, 432]
+            #     pred_img.size() -- [15, 3, 240, 432]
+
+            pred_img = (pred_img + 1) / 2   # [-1, 1.0] -> [0.0, 1.0]
             pred_img = pred_img.cpu().permute(0, 2, 3, 1).numpy()*255
+
+            # neighbor_ids --[0, 1, 2, 3, 4, 5] ?
             for i in range(len(neighbor_ids)):
                 idx = neighbor_ids[i]
                 img = np.array(pred_img[i]).astype(

@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from core.spectral_norm import spectral_norm as _spectral_norm
-
+import pdb
 
 class BaseNetwork(nn.Module):
     def __init__(self):
@@ -123,13 +123,28 @@ class InpaintGenerator(BaseNetwork):
         n_vecs = 1
         for i, d in enumerate(kernel_size):
             n_vecs *= int((output_size[i] + 2 * padding[i] - (d - 1) - 1) / stride[i] + 1)
+        # n_vecs -- 720
+
         for _ in range(stack_num):
             blocks.append(TransformerBlock(hidden=hidden, num_head=num_head, dropout=dropout, n_vecs=n_vecs,
                                            t2t_params=t2t_params))
         self.transformer = nn.Sequential(*blocks)
         self.ss = SoftSplit(channel // 2, hidden, kernel_size, stride, padding, dropout=dropout)
+        # (Pdb) self.ss
+        # SoftSplit(
+        #   (t2t): Unfold(kernel_size=(7, 7), dilation=1, padding=(3, 3), stride=(3, 3))
+        #   (embedding): Linear(in_features=6272, out_features=512, bias=True)
+        #   (dropout): Dropout(p=0.0, inplace=False)
+        # )
+
         self.add_pos_emb = AddPosEmb(n_vecs, hidden)
         self.sc = SoftComp(channel // 2, hidden, output_size, kernel_size, stride, padding)
+        # (Pdb) self.sc
+        # SoftComp(
+        #   (relu): LeakyReLU(negative_slope=0.2, inplace=True)
+        #   (embedding): Linear(in_features=512, out_features=6272, bias=True)
+        #   (t2t): Fold(output_size=(60, 108), kernel_size=(7, 7), dilation=1, padding=(3, 3), stride=(3, 3))
+        # )
 
         self.encoder = Encoder()
 
@@ -148,12 +163,16 @@ class InpaintGenerator(BaseNetwork):
             self.init_weights()
 
     def forward(self, masked_frames):
+        # masked_frames.size() -- [1, 10, 3, 480, 864]
+
         # extracting features
         b, t, c, h, w = masked_frames.size()
         time0 = time.time()
         enc_feat = self.encoder(masked_frames.view(b * t, c, h, w))
-        _, c, h, w = enc_feat.size()
-        trans_feat = self.ss(enc_feat, b)
+        _, c, h, w = enc_feat.size() # enc_feat.size() -- [10, 128, 120, 216]
+
+        trans_feat = self.ss(enc_feat, b) # trans_feat.size() -- [1, 28800, 512]
+
         trans_feat = self.add_pos_emb(trans_feat)
         trans_feat = self.transformer(trans_feat)
         trans_feat = self.sc(trans_feat, t)
@@ -298,6 +317,11 @@ class FeedForward(nn.Module):
 class FusionFeedForward(nn.Module):
     def __init__(self, d_model, p=0.1, n_vecs=None, t2t_params=None):
         super(FusionFeedForward, self).__init__()
+        # d_model = 512
+        # p = 0.0
+        # n_vecs = 720
+        # t2t_params = {'kernel_size': (7, 7), 'stride': (3, 3), 'padding': (3, 3), 'output_size': (60, 108)}
+
         # We set d_ff as a default to 1960
         hd = 1960
         self.conv1 = nn.Sequential(
@@ -315,6 +339,8 @@ class FusionFeedForward(nn.Module):
         self.n_vecs = n_vecs
 
     def forward(self, x):
+        # x.size() -- [1, 7200, 512]
+
         x = self.conv1(x)
         b, n, c = x.size()
         normalizer = x.new_ones(b, n, 49).view(-1, self.n_vecs, 49).permute(0, 2, 1)
@@ -339,10 +365,12 @@ class TransformerBlock(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, input):
+        # input.size() -- [1, 28800, 512]
         x = self.norm1(input)
         x = input + self.dropout(self.attention(x))
         y = self.norm2(x)
         x = x + self.ffn(y)
+
         return x
 
 
@@ -397,6 +425,7 @@ class Discriminator(BaseNetwork):
 
 
 def spectral_norm(module, mode=True):
+    print("spectral_norm mode = ", mode)
     if mode:
         return _spectral_norm(module)
     return module
