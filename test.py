@@ -168,7 +168,7 @@ def main_worker():
 
         with torch.no_grad():
             masked_imgs = selected_imgs*(1-selected_masks)            
-            pred_img = model(masked_imgs)
+            pred_img = model(masked_imgs)            
 
             print(masked_imgs.size(), pred_img.size())
 
@@ -188,11 +188,13 @@ def main_worker():
                 idx = neighbor_ids[i]
                 img = np.array(pred_img[i]).astype(
                     np.uint8)*binary_masks[idx] + frames[idx] * (1-binary_masks[idx])
-                if comp_frames[idx] is None:
-                    comp_frames[idx] = img
-                else:
-                    comp_frames[idx] = comp_frames[idx].astype(
-                        np.float32)*0.5 + img.astype(np.float32)*0.5
+                # if comp_frames[idx] is None:
+                #     comp_frames[idx] = img
+                # else:
+                #     comp_frames[idx] = comp_frames[idx].astype(
+                #         np.float32)*0.5 + img.astype(np.float32)*0.5
+                comp_frames[idx] = img
+
     name = args.video.strip().split('/')[-1]
     writer = cv2.VideoWriter(f"{name}_result.mp4", cv2.VideoWriter_fourcc(*"mp4v"), default_fps, (args.outw, args.outh))
     for f in range(video_length):
