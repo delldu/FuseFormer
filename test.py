@@ -23,7 +23,7 @@ parser.add_argument("--outw", type=int, default=432)
 parser.add_argument("--outh", type=int, default=240)
 parser.add_argument("--step", type=int, default=10)
 parser.add_argument("--num_ref", type=int, default=-1)
-parser.add_argument("--neighbor_stride", type=int, default=5)
+parser.add_argument("--neighbor_stride", type=int, default=2)
 parser.add_argument("--savefps", type=int, default=24)
 parser.add_argument("--use_mp4", action='store_true')
 args = parser.parse_args()
@@ -43,6 +43,7 @@ _to_tensors = transforms.Compose([
 # sample reference frames from the whole video 
 def get_ref_index(f, neighbor_ids, length):
     # neighbor_ids -- [0, 1, 2, 3, 4, 5]
+    return []
 
     ref_index = []
     if num_ref == -1:
@@ -127,19 +128,19 @@ def main_worker():
 
     video_length = len(frames)
     imgs = _to_tensors(frames).unsqueeze(0)*2.0 - 1.0
-    # imgs.size() -- torch.Size([1, 50, 3, 480, 864]) # Element range [-1.0, 1.0]
+    # imgs.size() -- torch.Size([1, 50, 3, 240, 432]) # Element range [-1.0, 1.0]
 
-    frames = [np.array(f).astype(np.uint8) for f in frames] # frames[0].shape -- (480, 864, 3), Element range [0, 255]
+    frames = [np.array(f).astype(np.uint8) for f in frames] # frames[0].shape -- (240, 432, 3), Element range [0, 255]
 
 
     masks = read_mask(args.mask)
 
     binary_masks = [np.expand_dims((np.array(m) != 0).astype(np.uint8), 2) for m in masks]
     #  len(binary_masks), binary_masks[0].shape, binary_masks[0].max(), binary_masks[0].min()
-    # (50, (480, 864, 1), 1, 0)
+    # (50, (240, 432, 1), 1, 0)
 
     masks = _to_tensors(masks).unsqueeze(0)
-    # masks.size() -- torch.Size([1, 50, 1, 480, 864])
+    # masks.size() -- torch.Size([1, 50, 1, 240, 432])
 
 
     imgs, masks = imgs.to(device), masks.to(device)
@@ -158,7 +159,9 @@ def main_worker():
         #   ref_ids -- [0, 20, 30, 40]
         #   neighbor_ids+ref_ids -- [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 20, 30, 40]
 
-        print(f, len(neighbor_ids), len(ref_ids))
+        # print(f, len(neighbor_ids), len(ref_ids))
+        print("f = ", f, "neighbor_ids = ", neighbor_ids, "ref_ids =", ref_ids)
+
         len_temp = len(neighbor_ids) + len(ref_ids)
         selected_imgs = imgs[:1, neighbor_ids+ref_ids, :, :, :]
         selected_masks = masks[:1, neighbor_ids+ref_ids, :, :, :]
@@ -166,6 +169,8 @@ def main_worker():
         with torch.no_grad():
             masked_imgs = selected_imgs*(1-selected_masks)            
             pred_img = model(masked_imgs)
+
+            print(masked_imgs.size(), pred_img.size())
 
             # if f == 0
             # masked_imgs.size() -- [1, 10, 3, 240, 432]

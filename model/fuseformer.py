@@ -117,6 +117,7 @@ class InpaintGenerator(BaseNetwork):
         padding = (3, 3)
         stride = (3, 3)
         output_size = (60, 108)
+
         blocks = []
         dropout = 0.
         t2t_params = {'kernel_size': kernel_size, 'stride': stride, 'padding': padding, 'output_size': output_size}
