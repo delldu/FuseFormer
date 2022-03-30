@@ -31,7 +31,8 @@ import pdb
 PATCH_ZEROPAD_TIMES = 8
 PATCH_NEIGHBOR_RADIUS = 5  # neighbor
 
-# tile_forward(model, device, input_tensor, h_tile_size=128, w_title_size=128, overlap_size=20, scale=1)
+MODEL_H_TILE_SIZE = 240
+MODEL_W_TILE_SIZE = 432
 
 
 def dialte(mask):
@@ -69,15 +70,6 @@ def get_model():
     return model, device
 
 
-def model_forward(model, device, input_tensor):
-    # zeropad for model
-    H, W = input_tensor.size(2), input_tensor.size(3)
-    if H % PATCH_ZEROPAD_TIMES != 0 or W % PATCH_ZEROPAD_TIMES != 0:
-        input_tensor = todos.data.zeropad_tensor(input_tensor, times=PATCH_ZEROPAD_TIMES)
-    output_tensor = todos.model.forward(model, device, input_tensor)
-    return output_tensor[:, :, 0:H, 0:W]
-
-
 def video_service(input_file, output_file, targ):
     # load video
     video = redos.video.Reader(input_file)
@@ -98,7 +90,7 @@ def video_service(input_file, output_file, targ):
 
     def reading_video_frames(no, data):
         data_tensor = todos.data.frame_totensor(data)
-        data_tensor = todos.data.resize_tensor(data_tensor, 240, 432)
+        # data_tensor = todos.data.resize_tensor(data_tensor, 240, 432)
 
         frame_list.append(data_tensor)
 
@@ -124,7 +116,7 @@ def video_service(input_file, output_file, targ):
         image_tensor = image_tensor * mask_tensor
 
         # image_tensor = todos.data.resize_tensor(image_tensor, 240, 432)
-        output_tensor = model_forward(model, device, image_tensor)
+        output_tensor = todos.model.tile_forward(model, device, image_tensor, h_tile_size=MODEL_H_TILE_SIZE, w_tile_size=MODEL_W_TILE_SIZE, overlap_size=20, scale=1)
 
         output_index = index - start
         temp_output_tensor = output_tensor[output_index : output_index + 1, :, :, :]
