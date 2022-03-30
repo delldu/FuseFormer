@@ -29,19 +29,23 @@ import pdb
 
 
 PATCH_ZEROPAD_TIMES = 8
-PATCH_NEIGHBOR_RADIUS = 5 # neighbor
+PATCH_NEIGHBOR_RADIUS = 5  # neighbor
+
+# tile_forward(model, device, input_tensor, h_tile_size=128, w_title_size=128, overlap_size=20, scale=1)
+
 
 def dialte(mask):
     for i in range(mask.size(0)):
         image = T.ToPILImage()(mask[i])
-        m = np.array(image.convert('L'))
+        m = np.array(image.convert("L"))
         m = np.array(m > 0).astype(np.uint8)
         m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)), iterations=4)
-        m = Image.fromarray(m*255)
+        m = Image.fromarray(m * 255)
         tensor = T.ToTensor()(m)
         mask[i] = tensor
 
     return mask
+
 
 def get_model():
     """Create model."""
@@ -56,11 +60,11 @@ def get_model():
     model = model.to(device)
     model.eval()
 
-    # model = torch.jit.script(model)
+    model = torch.jit.script(model)
 
-    # todos.data.mkdir("output")
-    # if not os.path.exists("output/video_patch.torch"):
-    #     model.save("output/video_patch.torch")
+    todos.data.mkdir("output")
+    if not os.path.exists("output/video_patch.torch"):
+        model.save("output/video_patch.torch")
 
     return model, device
 
@@ -91,13 +95,15 @@ def video_service(input_file, output_file, targ):
     model, device = get_model()
 
     frame_list = []
+
     def reading_video_frames(no, data):
         data_tensor = todos.data.frame_totensor(data)
         data_tensor = todos.data.resize_tensor(data_tensor, 240, 432)
 
         frame_list.append(data_tensor)
+
     video.forward(callback=reading_video_frames)
-  
+
     print(f"  process {input_file}, save to {output_file} ...")
     progress_bar = tqdm(total=video.n_frames)
     for index in range(video.n_frames):
@@ -105,12 +111,12 @@ def video_service(input_file, output_file, targ):
 
         start = max(index - PATCH_NEIGHBOR_RADIUS, 0)
         stop = min(index + PATCH_NEIGHBOR_RADIUS, video.n_frames - 1)
-        sub_frame_list = [frame_list[j] for j in range(start, stop + 1) ]
+        sub_frame_list = [frame_list[j] for j in range(start, stop + 1)]
 
-        input_tensor = torch.cat(sub_frame_list, dim = 0)
-        image_tensor = input_tensor[:, 0:3, :, :] * 2.0 - 1.0 # [0.0, 1.0] -> [-1.0, 1.0]
+        input_tensor = torch.cat(sub_frame_list, dim=0)
+        image_tensor = input_tensor[:, 0:3, :, :] * 2.0 - 1.0  # [0.0, 1.0] -> [-1.0, 1.0]
         mask_tensor = (input_tensor[:, 3:4, :, :] > 0.95).float()
-    
+
         mask_tensor = 1.0 - mask_tensor
         mask_tensor = dialte(mask_tensor)
         mask_tensor = 1.0 - mask_tensor
@@ -128,11 +134,10 @@ def video_service(input_file, output_file, targ):
         mask_tensor = (frame_list[index][:, 3:4, :, :] > 0.95).float()
         output_tensor = image_tensor * mask_tensor + temp_output_tensor.cpu() * (1.0 - mask_tensor)
 
-        output_file = "{}/{:06d}.png".format(output_dir, index + 1)
-        todos.data.save_tensor(output_tensor, output_file)
+        output_temp_file = "{}/{:06d}.png".format(output_dir, index + 1)
+        todos.data.save_tensor(output_tensor, output_temp_file)
 
-
-    # redos.video.encode(output_dir, output_file)
+    redos.video.encode(output_dir, output_file)
 
     # # delete temp files
     # for i in range(video.n_frames):
@@ -152,6 +157,7 @@ def video_client(name, input_file, output_file):
 
 def video_server(name, host="localhost", port=6379):
     return redos.video.service(name, "video_patch", video_service, host, port)
+
 
 def video_predict(input_file, output_file):
     return video_service(input_file, output_file, None)

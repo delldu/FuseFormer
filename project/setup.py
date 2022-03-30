@@ -22,7 +22,7 @@ setup(
     description="video patch package",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/delldu/ImageABC",
+    url="https://github.com/delldu/FuseFormer",
     packages=["video_patch"],
     package_data={"video_patch": ["models/video_patch.pth"]},
     include_package_data=True,

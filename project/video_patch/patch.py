@@ -27,31 +27,34 @@ class Encoder(nn.Module):
     def __init__(self):
         super(Encoder, self).__init__()
         self.group = [1, 2, 4, 8, 1]
-        self.layers = nn.ModuleList([
-            nn.Conv2d(3, 64, kernel_size=3, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(128, 256 , kernel_size=3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(256, 384, kernel_size=3, stride=1, padding=1, groups=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(640, 512, kernel_size=3, stride=1, padding=1, groups=2),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(768, 384, kernel_size=3, stride=1, padding=1, groups=4),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(640, 256, kernel_size=3, stride=1, padding=1, groups=8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(512, 128, kernel_size=3, stride=1, padding=1, groups=1),
-            nn.LeakyReLU(0.2, inplace=True)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                nn.Conv2d(3, 64, kernel_size=3, stride=2, padding=1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(256, 384, kernel_size=3, stride=1, padding=1, groups=1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(640, 512, kernel_size=3, stride=1, padding=1, groups=2),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(768, 384, kernel_size=3, stride=1, padding=1, groups=4),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(640, 256, kernel_size=3, stride=1, padding=1, groups=8),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(512, 128, kernel_size=3, stride=1, padding=1, groups=1),
+                nn.LeakyReLU(0.2, inplace=True),
+            ]
+        )
 
     def forward(self, x):
         bt, c, h, w = x.size()
-        h, w = h//4, w//4
+        h, w = h // 4, w // 4
         out = x
+        x0 = x  # useless, just only for torch.jit.script
         for i, layer in enumerate(self.layers):
             if i == 8:
                 x0 = out
@@ -77,16 +80,19 @@ class VideoPatchModel(nn.Module):
         output_size = (60, 108)
 
         blocks = []
-        dropout = 0.
-        t2t_params = {'kernel_size': kernel_size, 'stride': stride, 'padding': padding, 'output_size': output_size}
+        dropout = 0.0
+        t2t_params = {"kernel_size": kernel_size, "stride": stride, "padding": padding, "output_size": output_size}
         n_vecs = 1
         for i, d in enumerate(kernel_size):
             n_vecs *= int((output_size[i] + 2 * padding[i] - (d - 1) - 1) / stride[i] + 1)
         # n_vecs -- 720
 
         for _ in range(stack_num):
-            blocks.append(TransformerBlock(hidden=hidden, num_head=num_head, dropout=dropout, n_vecs=n_vecs,
-                                           t2t_params=t2t_params))
+            blocks.append(
+                TransformerBlock(
+                    hidden=hidden, num_head=num_head, dropout=dropout, n_vecs=n_vecs, t2t_params=t2t_params
+                )
+            )
         self.transformer = nn.Sequential(*blocks)
         self.ss = SoftSplit(channel // 2, hidden, kernel_size, stride, padding, dropout=dropout)
         # (Pdb) self.ss
@@ -115,9 +121,8 @@ class VideoPatchModel(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             deconv(64, 64, kernel_size=3, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1)
+            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1),
         )
-
 
     def forward(self, masked_frames):
         masked_frames = masked_frames.unsqueeze(0)
@@ -126,9 +131,9 @@ class VideoPatchModel(nn.Module):
         # extracting features
         b, t, c, h, w = masked_frames.size()
         enc_feat = self.encoder(masked_frames.view(b * t, c, h, w))
-        _, c, h, w = enc_feat.size() # enc_feat.size() -- [10, 128, 120, 216]
+        _, c, h, w = enc_feat.size()  # enc_feat.size() -- [10, 128, 120, 216]
 
-        trans_feat = self.ss(enc_feat, b) # trans_feat.size() -- [1, 28800, 512]
+        trans_feat = self.ss(enc_feat, b)  # trans_feat.size() -- [1, 28800, 512]
 
         trans_feat = self.add_pos_emb(trans_feat)
         trans_feat = self.transformer(trans_feat)
@@ -137,7 +142,7 @@ class VideoPatchModel(nn.Module):
         output = self.decoder(enc_feat)
         output = torch.tanh(output)
 
-        output = (output + 1.0)/2.0
+        output = (output + 1.0) / 2.0
 
         return output.clamp(0.0, 1.0)
 
@@ -145,12 +150,10 @@ class VideoPatchModel(nn.Module):
 class deconv(nn.Module):
     def __init__(self, input_channel, output_channel, kernel_size=3, padding=0):
         super().__init__()
-        self.conv = nn.Conv2d(input_channel, output_channel,
-                              kernel_size=kernel_size, stride=1, padding=padding)
+        self.conv = nn.Conv2d(input_channel, output_channel, kernel_size=kernel_size, stride=1, padding=padding)
 
     def forward(self, x):
-        x = F.interpolate(x, scale_factor=2, mode='bilinear',
-                          align_corners=True)
+        x = F.interpolate(x, scale_factor=2.0, mode="bilinear", align_corners=True)
         return self.conv(x)
 
 
@@ -168,11 +171,8 @@ class Attention(nn.Module):
         super(Attention, self).__init__()
         self.dropout = nn.Dropout(p=p)
 
-    def forward(self, query, key, value, m=None):
-        scores = torch.matmul(query, key.transpose(-2, -1)
-                              ) / math.sqrt(query.size(-1))
-        if m is not None:
-            scores.masked_fill_(m, -1e9)
+    def forward(self, query, key, value):
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(query.size(-1))
         p_attn = F.softmax(scores, dim=-1)
         p_attn = self.dropout(p_attn)
         p_val = torch.matmul(p_attn, value)
@@ -202,7 +202,7 @@ class SoftSplit(nn.Module):
         self.embedding = nn.Linear(c_in, hidden)
         self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, x, b):
+    def forward(self, x, b: int):
         feat = self.t2t(x)
         feat = feat.permute(0, 2, 1)
         feat = self.embedding(feat)
@@ -221,7 +221,7 @@ class SoftComp(nn.Module):
         h, w = output_size
         self.bias = nn.Parameter(torch.zeros((channel, h, w), dtype=torch.float32), requires_grad=True)
 
-    def forward(self, x, t):
+    def forward(self, x, t: int):
         feat = self.embedding(x)
         b, n, c = feat.size()
         feat = feat.view(b * t, -1, c).permute(0, 2, 1)
@@ -267,7 +267,8 @@ class FeedForward(nn.Module):
             nn.ReLU(inplace=True),
             nn.Dropout(p=p),
             nn.Linear(d_model * 4, d_model),
-            nn.Dropout(p=p))
+            nn.Dropout(p=p),
+        )
 
     def forward(self, x):
         x = self.conv(x)
@@ -284,17 +285,12 @@ class FusionFeedForward(nn.Module):
 
         # We set d_ff as a default to 1960
         hd = 1960
-        self.conv1 = nn.Sequential(
-            nn.Linear(d_model, hd))
-        self.conv2 = nn.Sequential(
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=p),
-            nn.Linear(hd, d_model),
-            nn.Dropout(p=p))
+        self.conv1 = nn.Sequential(nn.Linear(d_model, hd))
+        self.conv2 = nn.Sequential(nn.ReLU(inplace=True), nn.Dropout(p=p), nn.Linear(hd, d_model), nn.Dropout(p=p))
         assert t2t_params is not None and n_vecs is not None
         tp = t2t_params.copy()
         self.fold = nn.Fold(**tp)
-        del tp['output_size']
+        del tp["output_size"]
         self.unfold = nn.Unfold(**tp)
         self.n_vecs = n_vecs
 
@@ -303,10 +299,15 @@ class FusionFeedForward(nn.Module):
 
         x = self.conv1(x)
         b, n, c = x.size()
-        normalizer = x.new_ones(b, n, 49).view(-1, self.n_vecs, 49).permute(0, 2, 1)
-        x = self.unfold(self.fold(x.view(-1, self.n_vecs, c).permute(0, 2, 1)) / self.fold(normalizer)).permute(0, 2,
-                                                                                                                1).contiguous().view(
-            b, n, c)
+        # normalizer = x.new_ones(b, n, 49).view(-1, self.n_vecs, 49).permute(0, 2, 1)
+        normalizer = torch.ones(b, n, 49).view(-1, self.n_vecs, 49).permute(0, 2, 1).to(x.device)
+
+        x = (
+            self.unfold(self.fold(x.view(-1, self.n_vecs, c).permute(0, 2, 1)) / self.fold(normalizer))
+            .permute(0, 2, 1)
+            .contiguous()
+            .view(b, n, c)
+        )
         x = self.conv2(x)
         return x
 
