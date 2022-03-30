@@ -28,14 +28,24 @@ from . import patch
 import pdb
 
 
-PATCH_ZEROPAD_TIMES = 8
-PATCH_NEIGHBOR_RADIUS = 5  # neighbor
+NEIGHBOR_STRIDE = 5  # neighbor radius
+REFERENCE_STRIDE = 10
 
 MODEL_H_TILE_SIZE = 240
 MODEL_W_TILE_SIZE = 432
 
+def get_nb_list(index, length):
+    nb_list = [i for i in range(max(0, index - NEIGHBOR_STRIDE), min(length, index + NEIGHBOR_STRIDE + 1))]
+    # nb_list -- [0, 1, 2, 3, 4, 5]
+    ref_list = []
+    for i in range(0, length, REFERENCE_STRIDE): # ref_length -- step -- 10
+        if not i in nb_list:
+            ref_list.append(i) # make sure not repeat
+    # ref_list -- [10, 20, 30, 40] for length == 50
+    return nb_list, ref_list
 
-def dialte(mask):
+
+def dilate(mask):
     for i in range(mask.size(0)):
         image = T.ToPILImage()(mask[i])
         m = np.array(image.convert("L"))
@@ -73,6 +83,7 @@ def get_model():
 def video_service(input_file, output_file, targ):
     # load video
     video = redos.video.Reader(input_file)
+    # video = redos.video.Sequence(input_file)
     print(video)
 
     if video.n_frames < 1:
@@ -86,55 +97,60 @@ def video_service(input_file, output_file, targ):
     # load model
     model, device = get_model()
 
-    frame_list = []
+    image_list = []
+    omask_list = []
 
     def reading_video_frames(no, data):
         data_tensor = todos.data.frame_totensor(data)
-        # data_tensor = todos.data.resize_tensor(data_tensor, 240, 432)
+        image = data_tensor[:, 0:3, :, :]
+        mask = (data_tensor[:, 3:4, :, :] > 0.90).float() # convert 0.0 or 1.0
 
-        frame_list.append(data_tensor)
+        image_list.append(image)
+        omask_list.append(mask) # orignal mask(labeled)
 
     video.forward(callback=reading_video_frames)
+    image_tensor = torch.cat(image_list, dim = 0)
+    omask_tensor = torch.cat(omask_list, dim = 0)
+
+    output_list = [None] * video.n_frames
 
     print(f"  process {input_file}, save to {output_file} ...")
     progress_bar = tqdm(total=video.n_frames)
+    for index in range(0, video.n_frames,  NEIGHBOR_STRIDE):
+        progress_bar.update(NEIGHBOR_STRIDE)
+        nb_list, ref_list = get_nb_list(index, video.n_frames)
+
+        selected_imgs = image_tensor[nb_list + ref_list, :, :, :] * 2.0 - 1.0 # from [0, 1.0 --> [-1.0, 1.0]
+        selected_mask = omask_tensor[nb_list + ref_list, :, :, :]
+
+        selected_mask = 1.0 - selected_mask
+        selected_mask = dilate(selected_mask)
+        selected_mask = 1.0 - selected_mask
+
+        input_tensors = selected_imgs * selected_mask
+
+        # pdb.set_trace()       
+
+        output_tensors = todos.model.tile_forward(model, device, input_tensors, 
+            h_tile_size=MODEL_H_TILE_SIZE, w_tile_size=MODEL_W_TILE_SIZE, overlap_size=20, scale=1)
+
+        for i in range(len(nb_list)):
+            k = nb_list[i]
+            # output_tensor = image_tensor[k] * omask_tensor[k] +  output_tensors[i] * (1.0 - omask_tensor[k])
+
+            output_list[k] = output_tensors[i] # output_tensor
+
+    # save
     for index in range(video.n_frames):
-        progress_bar.update(1)
-
-        start = max(index - PATCH_NEIGHBOR_RADIUS, 0)
-        stop = min(index + PATCH_NEIGHBOR_RADIUS, video.n_frames - 1)
-        sub_frame_list = [frame_list[j] for j in range(start, stop + 1)]
-
-        input_tensor = torch.cat(sub_frame_list, dim=0)
-        image_tensor = input_tensor[:, 0:3, :, :] * 2.0 - 1.0  # [0.0, 1.0] -> [-1.0, 1.0]
-        mask_tensor = (input_tensor[:, 3:4, :, :] > 0.95).float()
-
-        mask_tensor = 1.0 - mask_tensor
-        mask_tensor = dialte(mask_tensor)
-        mask_tensor = 1.0 - mask_tensor
-
-        image_tensor = image_tensor * mask_tensor
-
-        # image_tensor = todos.data.resize_tensor(image_tensor, 240, 432)
-        output_tensor = todos.model.tile_forward(model, device, image_tensor, h_tile_size=MODEL_H_TILE_SIZE, w_tile_size=MODEL_W_TILE_SIZE, overlap_size=20, scale=1)
-
-        output_index = index - start
-        temp_output_tensor = output_tensor[output_index : output_index + 1, :, :, :]
-        # temp_output_tensor = todos.data.resize_tensor(temp_output_tensor, video.height, video.width)
-
-        image_tensor = frame_list[index][:, 0:3, :, :]
-        mask_tensor = (frame_list[index][:, 3:4, :, :] > 0.95).float()
-        output_tensor = image_tensor * mask_tensor + temp_output_tensor.cpu() * (1.0 - mask_tensor)
-
         output_temp_file = "{}/{:06d}.png".format(output_dir, index + 1)
-        todos.data.save_tensor(output_tensor, output_temp_file)
+        todos.data.save_tensor(output_list[index], output_temp_file)        
 
     redos.video.encode(output_dir, output_file)
 
-    # # delete temp files
-    # for i in range(video.n_frames):
-    #     temp_output_file = "{}/{:06d}.png".format(output_dir, i)
-    #     os.remove(temp_output_file)
+    # delete temp files
+    for i in range(video.n_frames):
+        temp_output_file = "{}/{:06d}.png".format(output_dir, i + 1)
+        os.remove(temp_output_file)
 
     return True
 
