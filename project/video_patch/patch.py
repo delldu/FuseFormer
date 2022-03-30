@@ -125,19 +125,19 @@ class VideoPatchModel(nn.Module):
         )
 
     def forward(self, masked_frames):
-        masked_frames = masked_frames.unsqueeze(0)
-        # masked_frames.size() -- [1, 10, 3, 480, 864]
+        masked_frames = masked_frames
+        # masked_frames.size() -- [10, 3, 480, 864]
 
         # extracting features
-        b, t, c, h, w = masked_frames.size()
-        enc_feat = self.encoder(masked_frames.view(b * t, c, h, w))
+        b, c, h, w = masked_frames.size()
+        enc_feat = self.encoder(masked_frames)
         _, c, h, w = enc_feat.size()  # enc_feat.size() -- [10, 128, 120, 216]
 
-        trans_feat = self.ss(enc_feat, b)  # trans_feat.size() -- [1, 28800, 512]
+        trans_feat = self.ss(enc_feat, 1)  # trans_feat.size() -- [1, 28800, 512]
 
         trans_feat = self.add_pos_emb(trans_feat)
         trans_feat = self.transformer(trans_feat)
-        trans_feat = self.sc(trans_feat, t)
+        trans_feat = self.sc(trans_feat, b)
         enc_feat = enc_feat + trans_feat
         output = self.decoder(enc_feat)
         output = torch.tanh(output)
