@@ -34,13 +34,14 @@ REFERENCE_STRIDE = 10
 MODEL_H_TILE_SIZE = 240
 MODEL_W_TILE_SIZE = 432
 
+
 def get_nb_list(index, length):
     nb_list = [i for i in range(max(0, index - NEIGHBOR_STRIDE), min(length, index + NEIGHBOR_STRIDE + 1))]
     # nb_list -- [0, 1, 2, 3, 4, 5]
     ref_list = []
-    for i in range(0, length, REFERENCE_STRIDE): # ref_length -- step -- 10
+    for i in range(0, length, REFERENCE_STRIDE):  # ref_length -- step -- 10
         if not i in nb_list:
-            ref_list.append(i) # make sure not repeat
+            ref_list.append(i)  # make sure not repeat
     # ref_list -- [10, 20, 30, 40] for length == 50
     return nb_list, ref_list
 
@@ -103,24 +104,24 @@ def video_service(input_file, output_file, targ):
     def reading_video_frames(no, data):
         data_tensor = todos.data.frame_totensor(data)
         image = data_tensor[:, 0:3, :, :]
-        mask = (data_tensor[:, 3:4, :, :] > 0.90).float() # convert 0.0 or 1.0
+        mask = (data_tensor[:, 3:4, :, :] > 0.90).float()  # convert 0.0 or 1.0
 
         image_list.append(image)
-        omask_list.append(mask) # orignal mask(labeled)
+        omask_list.append(mask)  # orignal mask(labeled)
 
     video.forward(callback=reading_video_frames)
-    image_tensor = torch.cat(image_list, dim = 0)
-    omask_tensor = torch.cat(omask_list, dim = 0)
+    image_tensor = torch.cat(image_list, dim=0)
+    omask_tensor = torch.cat(omask_list, dim=0)
 
     output_list = [None] * video.n_frames
 
     print(f"  process {input_file}, save to {output_file} ...")
     progress_bar = tqdm(total=video.n_frames)
-    for index in range(0, video.n_frames,  NEIGHBOR_STRIDE):
+    for index in range(0, video.n_frames, NEIGHBOR_STRIDE):
         progress_bar.update(NEIGHBOR_STRIDE)
         nb_list, ref_list = get_nb_list(index, video.n_frames)
 
-        selected_imgs = image_tensor[nb_list + ref_list, :, :, :] * 2.0 - 1.0 # from [0, 1.0 --> [-1.0, 1.0]
+        selected_imgs = image_tensor[nb_list + ref_list, :, :, :] * 2.0 - 1.0  # from [0, 1.0 --> [-1.0, 1.0]
         selected_mask = omask_tensor[nb_list + ref_list, :, :, :]
 
         selected_mask = 1.0 - selected_mask
@@ -129,21 +130,25 @@ def video_service(input_file, output_file, targ):
 
         input_tensors = selected_imgs * selected_mask
 
-        # pdb.set_trace()       
-
-        output_tensors = todos.model.tile_forward(model, device, input_tensors, 
-            h_tile_size=MODEL_H_TILE_SIZE, w_tile_size=MODEL_W_TILE_SIZE, overlap_size=20, scale=1)
+        output_tensors = todos.model.tile_forward(
+            model,
+            device,
+            input_tensors,
+            h_tile_size=MODEL_H_TILE_SIZE,
+            w_tile_size=MODEL_W_TILE_SIZE,
+            overlap_size=20,
+            scale=1,
+        )
 
         for i in range(len(nb_list)):
             k = nb_list[i]
             # output_tensor = image_tensor[k] * omask_tensor[k] +  output_tensors[i] * (1.0 - omask_tensor[k])
-
-            output_list[k] = output_tensors[i] # output_tensor
+            output_list[k] = output_tensors[i]
 
     # save
     for index in range(video.n_frames):
         output_temp_file = "{}/{:06d}.png".format(output_dir, index + 1)
-        todos.data.save_tensor(output_list[index], output_temp_file)        
+        todos.data.save_tensor(output_list[index], output_temp_file)
 
     redos.video.encode(output_dir, output_file)
 
