@@ -11,6 +11,7 @@ from torchvision import transforms
 
 from core.utils import Stack, ToTorchFormatTensor
 import pdb
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description="FuseFormer")
 parser.add_argument("-v", "--video", type=str, required=True)
@@ -23,13 +24,13 @@ parser.add_argument("--outw", type=int, default=432)
 parser.add_argument("--outh", type=int, default=240)
 parser.add_argument("--step", type=int, default=10)
 parser.add_argument("--num_ref", type=int, default=-1)
-parser.add_argument("--neighbor_stride", type=int, default=2)
+parser.add_argument("--neighbor_stride", type=int, default=5)
 parser.add_argument("--savefps", type=int, default=24)
 parser.add_argument("--use_mp4", action='store_true')
 args = parser.parse_args()
 
 
-w, h = args.width, args.height
+W, H = args.width, args.height
 ref_length = args.step  # ref_step
 num_ref = args.num_ref
 neighbor_stride = args.neighbor_stride
@@ -43,11 +44,9 @@ _to_tensors = transforms.Compose([
 # sample reference frames from the whole video 
 def get_ref_index(f, neighbor_ids, length):
     # neighbor_ids -- [0, 1, 2, 3, 4, 5]
-    return []
-
     ref_index = []
-    if num_ref == -1:
-        for i in range(0, length, ref_length):
+    if num_ref == -1: # True
+        for i in range(0, length, ref_length): # ref_length -- step -- 10
             if not i in neighbor_ids:
                 ref_index.append(i)
     else:
@@ -59,6 +58,8 @@ def get_ref_index(f, neighbor_ids, length):
                 #if len(ref_index) >= 5-len(neighbor_ids):
                     break
                 ref_index.append(i)
+
+    # [10, 20, 30, 40] for length == 50
     return ref_index
 
 
@@ -71,7 +72,7 @@ def read_mask(mpath):
     mnames.sort()
     for m in mnames: 
         m = Image.open(os.path.join(mpath, m))
-        m = m.resize((w, h), Image.NEAREST)
+        m = m.resize((W, H), Image.NEAREST)
         m = np.array(m.convert('L'))
         m = np.array(m > 0).astype(np.uint8)
         m = cv2.dilate(m, cv2.getStructuringElement(
@@ -92,7 +93,7 @@ def read_frame_from_videos(args):
         count = 0
         while success:
             image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            frames.append(image.resize((w,h)))
+            frames.append(image.resize((W,H)))
             success, image = vidcap.read()
             count += 1
     else:
@@ -102,7 +103,7 @@ def read_frame_from_videos(args):
         for fr in fr_lst:
             image = cv2.imread(fr)
             image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            frames.append(image.resize((w,h)))
+            frames.append(image.resize((W,H)))
 
     # len(frames) -- 50
     # frames[0] -- <PIL.Image.Image image mode=RGB size=864x480 at 0x7F04EC221460>
@@ -150,7 +151,10 @@ def main_worker():
     # completing holes by spatial-temporal transformers
 
     # video_length, neighbor_stride -- (50, 5)
+    progress_bar = tqdm(total=video_length)
     for f in range(0, video_length, neighbor_stride):
+        progress_bar.update(neighbor_stride)
+
         neighbor_ids = [i for i in range(max(0, f-neighbor_stride), min(video_length, f+neighbor_stride+1))]
         ref_ids = get_ref_index(f, neighbor_ids, video_length)
 
@@ -159,48 +163,48 @@ def main_worker():
         #   ref_ids -- [0, 20, 30, 40]
         #   neighbor_ids+ref_ids -- [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 20, 30, 40]
 
-        # print(f, len(neighbor_ids), len(ref_ids))
-        print("f = ", f, "neighbor_ids = ", neighbor_ids, "ref_ids =", ref_ids)
+        # print("f = ", f, "neighbor_ids = ", neighbor_ids, "ref_ids =", ref_ids)
 
-        len_temp = len(neighbor_ids) + len(ref_ids)
+        # len_temp = len(neighbor_ids) + len(ref_ids)
         selected_imgs = imgs[:1, neighbor_ids+ref_ids, :, :, :]
         selected_masks = masks[:1, neighbor_ids+ref_ids, :, :, :]
 
+        masked_imgs = selected_imgs*(1-selected_masks)            
+
         with torch.no_grad():
-            masked_imgs = selected_imgs*(1-selected_masks)            
-            pred_img = model(masked_imgs)            
+            pred_img = model(masked_imgs)
+        # masked_imgs.size() -- [1, 7, 3, 240, 432]
+        # pred_img.size() -- [7, 3, 240, 432]
 
-            print(masked_imgs.size(), pred_img.size())
+        # if f == 0
+        # masked_imgs.size() -- [1, 10, 3, 240, 432]
+        # pred_img.size() -- [10, 3, 240, 432]
 
-            # if f == 0
-            # masked_imgs.size() -- [1, 10, 3, 240, 432]
-            # pred_img.size() -- [10, 3, 240, 432]
+        # if f == 10:
+        #     masked_imgs.size() -- [1, 15, 3, 240, 432]
+        #     pred_img.size() -- [15, 3, 240, 432]
 
-            # if f == 10:
-            #     masked_imgs.size() -- [1, 15, 3, 240, 432]
-            #     pred_img.size() -- [15, 3, 240, 432]
+        pred_img = (pred_img + 1) / 2   # [-1, 1.0] -> [0.0, 1.0]
+        pred_img = pred_img.cpu().permute(0, 2, 3, 1).numpy()*255
 
-            pred_img = (pred_img + 1) / 2   # [-1, 1.0] -> [0.0, 1.0]
-            pred_img = pred_img.cpu().permute(0, 2, 3, 1).numpy()*255
-
-            # neighbor_ids --[0, 1, 2, 3, 4, 5] ?
-            for i in range(len(neighbor_ids)):
-                idx = neighbor_ids[i]
-                img = np.array(pred_img[i]).astype(
-                    np.uint8)*binary_masks[idx] + frames[idx] * (1-binary_masks[idx])
-                # if comp_frames[idx] is None:
-                #     comp_frames[idx] = img
-                # else:
-                #     comp_frames[idx] = comp_frames[idx].astype(
-                #         np.float32)*0.5 + img.astype(np.float32)*0.5
-                comp_frames[idx] = img
+        # neighbor_ids --[0, 1, 2, 3, 4, 5] ?
+        for i in range(len(neighbor_ids)):
+            idx = neighbor_ids[i]
+            img = np.array(pred_img[i]).astype(
+                np.uint8)*binary_masks[idx] + frames[idx] * (1-binary_masks[idx])
+            # if comp_frames[idx] is None:
+            #     comp_frames[idx] = img
+            # else:
+            #     comp_frames[idx] = comp_frames[idx].astype(
+            #         np.float32)*0.5 + img.astype(np.float32)*0.5
+            comp_frames[idx] = img
 
     name = args.video.strip().split('/')[-1]
     writer = cv2.VideoWriter(f"{name}_result.mp4", cv2.VideoWriter_fourcc(*"mp4v"), default_fps, (args.outw, args.outh))
     for f in range(video_length):
         comp = np.array(comp_frames[f]).astype(
             np.uint8)*binary_masks[f] + frames[f] * (1-binary_masks[f])
-        if w != args.outw:
+        if W != args.outw:
             comp = cv2.resize(comp, (args.outw, args.outh), interpolation=cv2.INTER_LINEAR)
         writer.write(cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB))
     writer.release()

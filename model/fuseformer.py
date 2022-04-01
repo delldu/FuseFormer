@@ -1,7 +1,6 @@
 ''' Fuseformer for Video Inpainting
 '''
 import numpy as np
-import time
 import math
 from functools import reduce
 import torch
@@ -168,7 +167,6 @@ class InpaintGenerator(BaseNetwork):
 
         # extracting features
         b, t, c, h, w = masked_frames.size()
-        time0 = time.time()
         enc_feat = self.encoder(masked_frames.view(b * t, c, h, w))
         _, c, h, w = enc_feat.size() # enc_feat.size() -- [10, 128, 120, 216]
 
@@ -209,11 +207,8 @@ class Attention(nn.Module):
         super(Attention, self).__init__()
         self.dropout = nn.Dropout(p=p)
 
-    def forward(self, query, key, value, m=None):
-        scores = torch.matmul(query, key.transpose(-2, -1)
-                              ) / math.sqrt(query.size(-1))
-        if m is not None:
-            scores.masked_fill_(m, -1e9)
+    def forward(self, query, key, value):
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(query.size(-1))
         p_attn = F.softmax(scores, dim=-1)
         p_attn = self.dropout(p_attn)
         p_val = torch.matmul(p_attn, value)
